@@ -1,9 +1,14 @@
 #lang racket
 
 (module+ examples
-  (provide tps-no-inter tps-no-interx2
+  (provide gm-inter
+           gm-no-inter
+           gm-loop
+           gm-8
+
+           tps-no-inter tps-no-interx2
            tps-inter
-           tps-loop
+           tps-loop  ; Not part b loops... Just forms a circle
            tps-loop-big
            tps-paral+inter))
 
@@ -31,6 +36,44 @@
                       (hash 0 (set 0)
                             1 (set 2)))))
 
+(module+ examples
+  (define gm-no-inter
+    (make-gmap '("#.."
+                 "..#"
+                 "^..")))
+  (define gm-inter
+    (make-gmap '(".#..."
+                 "....#"
+                 "....."
+                 ".^.#.")))
+  (define gm-loop
+    (make-gmap '(".#..."
+                 "....#"
+                 "#...."
+                 ".^.#.")))
+  (define gm-8
+    (make-gmap '("...#...."
+                 ".#.....#"
+                 ".>...#.."
+                 "..#....."
+                 "....#..."
+                 "#......."
+                 "......#."))))
+
+;; Map Dir Coord -> Map
+(define (change-guard/gmap m gdir gpos)
+  (struct-copy gmap m
+               [dir gdir]
+               [guard-pos gpos]))
+
+;; Map Coord -> Map
+(define (add-obstruction/gmap m new-obstruction-pos)
+  (match-define (cons x y) new-obstruction-pos)
+  (struct-copy gmap m
+               [x->ys (hash-update (gmap-x->ys m) x (λ (s) (set-add s y)) (set))]
+               [y->xs (hash-update (gmap-y->xs m) y (λ (s) (set-add s x)) (set))])
+  )
+
 ;; A Dir is one of ['n | 's | 'e | 'w]
 ;; Represents which direction the guard is facing.
 
@@ -53,6 +96,38 @@
 ;; Left of pair is the x-value, right of pair is the y-value.
 ;; Rightwards is increase in x, downwards is increase in y.
 ;; Top left position is (0,0)
+
+(define (in-inclusive-pos-range a b)
+  (match-define (cons ax ay) a)
+  (match-define (cons bx by) b)
+  (cond
+    [(and (= ax bx) (= ay by))
+     (stream-cons (values ax ay) empty-stream)]
+    [(and (= ax bx) (> ay by))
+     (define new-a (cons ax (sub1 ay)))
+     (stream-cons (values (car a) (cdr a))
+                  (in-inclusive-pos-range new-a b))]
+    [(and (= ax bx) (< ay by))
+     (define new-a (cons ax (add1 ay)))
+     (stream-cons (values (car a) (cdr a))
+                  (in-inclusive-pos-range new-a b))]
+    [(and (> ax bx) (= ay by))
+     (define new-a (cons (sub1 ax) ay))
+     (stream-cons (values (car a) (cdr a))
+                  (in-inclusive-pos-range new-a b))]
+    [(and (< ax bx) (= ay by))
+     (define new-a (cons (add1 ax) ay))
+     (stream-cons (values (car a) (cdr a))
+                  (in-inclusive-pos-range new-a b))]))
+(module+ test
+  (define-simple-check (check-iipr a b exd)
+    (for ([(x y) (in-inclusive-pos-range a b)]
+          [p exd])
+      (check-equal? (cons x y) p)))
+  (check-iipr '(3 . 1) '(6 . 1)
+              '((3 . 1) (4 . 1) (5 . 1) (6 . 1)))
+  (check-iipr '(2 . 7) '(2 . 5)
+              '((2 . 7) (2 . 6) (2 . 5))))
 
 ;; Absolute difference between the two given Coords.
 (define (coord-diff a b)
@@ -88,82 +163,15 @@
   (check-equal? (overlap 1 6 3 5) 3)
   (check-equal? (overlap 0 2 1 3) 2))
 
-;; Assumes that both are perpendicular and not connected.
-(define (has-cross? a1 a2 b1 b2)
-  (match-define (list vertical-x y-s y-l horizontal-y x-s x-l)
-    (get-verhor a1 a2 b1 b2))
-  (and (<= x-s vertical-x x-l)
-       (<= y-s horizontal-y y-l)))
-(define (get-verhor a1 a2 b1 b2)
-  (if (= (car a1) (car a2))
-      (append (list (car a1))
-              (sort (list (cdr a1) (cdr a2)) <)
-              (list (cdr b1))
-              (sort (list (car b1) (car b2)) <))
-      (append (list (car b1))
-              (sort (list (cdr b1) (cdr b2)) <)
-              (list (cdr a1))
-              (sort (list (car a1) (car a2)) <))))
 
-(module+ test
-  (check-true (has-cross? '(0 . 1) '(2 . 1) '(1 . 0) '(1 . 2)))
-  (check-true (has-cross? '(0 . 1) '(2 . 1) '(2 . 0) '(2 . 2)))
-  (check-true (has-cross? '(0 . 1) '(2 . 1) '(0 . 0) '(0 . 2)))
-  (check-true (has-cross? '(1 . 0) '(1 . 2) '(0 . 1) '(2 . 1)))
-  (check-false (has-cross? '(0 . 1) '(2 . 1) '(3 . 0) '(3 . 2)))
-  (check-false (has-cross? '(0 . 2) '(0 . 1) '(1 . 1) '(1 . 2))))
-
-(define (get-intersections a1 a2 b1 b2)
-  (cond
-    [(both-vertical? a1 a2 b1 b2)
-     (if (equal? (car a1) (car b1))
-         (overlap (cdr a1) (cdr a2) (cdr b1) (cdr b2))
-         0)]
-    [(both-horizontal? a1 a2 b1 b2)
-     (if (equal? (cdr a1) (cdr b1))
-         (overlap (car a1) (car a2) (car b1) (car b2))
-         0)]
-    [else
-     (if (has-cross? a1 a2 b1 b2) 1 0)]))
-(module+ test
-  (check-equal? (get-intersections '(0 . 2) '(0 . 1) '(1 . 1) '(1 . 2))
-                0)
-
-  ; Corner
-  (check-equal? (get-intersections '(1 . 2) '(1 . 0) '(1 . 0) '(2 . 0))
-                1)
-  (check-equal? (get-intersections '(0 . 1) '(2 . 1) '(2 . 1) '(2 . 0))
-                1)
-  (check-equal? (get-intersections '(1 . 0) '(1 . 1) '(1 . 1) '(4 . 1))
-                1)
-  (check-equal? (get-intersections '(2 . 1) '(2 . 0) '(2 . 0) '(1 . 0))
-                1)
-  (check-equal? (get-intersections '(2 . 0) '(1 . 0) '(1 . 0) '(1 . 1))
-                1)
-
-  ; Cross
-  (check-equal? (get-intersections '(0 . 1) '(2 . 1) '(1 . 0) '(1 . 2))
-                1)
-
-  ; T
-  (check-equal? (get-intersections '(0 . 1) '(2 . 1) '(2 . 0) '(2 . 2))
-                1)
-  (check-equal? (get-intersections '(0 . 1) '(2 . 1) '(1 . 0) '(1 . 1))
-                1)
-  (check-equal? (get-intersections '(2 . 1) '(2 . 0) '(1 . 1) '(4 . 1))
-                1)
-
-  ; Parallel
-  (check-equal? (get-intersections '(2 . 1) '(0 . 1) '(1 . 1) '(3 . 1))
-                2)
-  (check-equal? (get-intersections '(1 . 1) '(3 . 1) '(2 . 1) '(0 . 1))
-                2)
-  (check-equal? (get-intersections '(0 . 1) '(2 . 1) '(1 . 1) '(4 . 1))
-                2))
 
 ;; A TurningPoints is a [NEListof Coord]
 ;; Represents where the guard stops to turn, includes the guard's
 ;; initial position and final coordinates.
+
+;; A DirTurningPoints is a [NEListof [Pair Dir Coord]]
+;; Where each turning point is associated with the direction the guard
+;; is facing when they reach the turning point.
 
 (module+ examples
   (define tps-no-inter '((0 . 2) (0 . 1) (1 . 1) (1 . 2)))
@@ -173,73 +181,20 @@
   (define tps-loop-big '((0 . 1) (3 . 1) (3 . 0) (1 . 0) (1 . 1) (5 . 1)))
   (define tps-paral+inter '((1 . 1) (3 . 1) (3 . 2) (0 . 2) (0 . 0) (2 . 0) (2 . 1) (0 . 1))))
 
-(define num-points length)
 
-(define (total-dist/tps tps)
-  (for/fold ([s 0]
-             [prev-tp (first tps)]
-             #:result s)
-            ([curr-tp (in-list (rest tps))])
-    (values (+ s 1 (coord-diff prev-tp curr-tp))
-            curr-tp)))
-(module+ test
-  (check-equal? (total-dist/tps tps-no-inter) 6)
-  (check-equal? (total-dist/tps tps-no-interx2) 9)
-  (check-equal? (total-dist/tps tps-inter) 10)
-  (check-equal? (total-dist/tps tps-loop) 13)
-  (check-equal? (total-dist/tps tps-loop-big) 16)
-  (check-equal? (total-dist/tps tps-paral+inter) 20))
+;; DirTurningPoints Dir Coord -> Boolean
+(define (dtps-contains? dtps dir pos)
+  (for/fold ([yes? #f])
+            ([curr-dtps (in-list dtps)]
+             #:do [(match-define (cons d p) curr-dtps)])
+    #:break yes?
+    (and (equal? d dir) (equal? p pos))))
 
-(define (in-first-nerest lox)
-  (cond
-    [(empty? (rest lox))
-     empty-stream]
-    [(cons? (rest lox))
-     (stream-cons (values (first lox) lox)
-                  (in-first-nerest (rest lox)))]))
-(module+ test
-  (define-simple-check (check-ifn lox expected)
-    (for ([(x rx) (in-first-nerest lox)]
-          [p (in-list expected)])
-      (check-equal? (list x rx)
-                    p)))
-
-  (check-ifn '(1 2) '((1 (1 2)) (2 (2)))))
-
-;; Includes parallels.
-;; O(n^2) time complexity.
-(define (total-intersections tps)
-  (newline) (println "NEW")
-  (for/fold ([outer-num 0]
-             [prev-a (first tps)]
-             #:result outer-num)
-            ([(curr-a remaining-tps) (in-first-nerest (rest tps))])
-    (values
-     (+ outer-num
-        (for/fold ([inner-num 0]
-                   [prev-b (first remaining-tps)]
-                   #:result inner-num)
-                  ([curr-b (in-list (rest remaining-tps))])
-          
-          (printf "~a," (get-intersections prev-a curr-a prev-b curr-b))
-          (printf "(~a,~a,~a,~a)"
-                  prev-a curr-a prev-b curr-b)
-          (values (+ inner-num
-                     (get-intersections prev-a curr-a prev-b curr-b))
-                  curr-b)))
-     curr-a)))
-(module+ test
-  (check-equal? (total-intersections tps-no-inter) 2)
-  (check-equal? (total-intersections tps-no-interx2) 2)
-  (check-equal? (total-intersections tps-inter) 4)
-  (check-equal? (total-intersections tps-loop) 6)
-  (check-equal? (total-intersections tps-loop-big) 7)
-  (check-equal? (total-intersections tps-paral+inter) 9))
 
 (define (part-a)
   (define initial-m (parse))
   (define tps (map->turning-points initial-m))
-  (define num-distinct-poss (num-distinct-poss/tps tps))
+  (define num-distinct-poss (num-distinct-poss/delta-posss tps))
   (println num-distinct-poss))
 
 (define (parse [ip (current-input-port)])
@@ -384,20 +339,37 @@
   (check-false (get-closest-to 1 (set 1 2 4 5) <)))
 
 ;; TurningPoints -> Nat
-(define (num-distinct-poss/tps tps)
+(define (num-distinct-poss/delta-posss tps)
   (for/fold ([s 0]
              [seen-rv-tps (list (first tps))]
              [prev-tp (first tps)]
              #:result s)
             ([curr-tp (in-list (rest tps))])
-    (values (+ s (num-distinct-poss/tp prev-tp curr-tp seen-rv-tps))
+    (values (+ s (num-distinct-poss/delta-poss prev-tp curr-tp seen-rv-tps))
             (cons curr-tp seen-rv-tps)
             curr-tp)))
+(module+ test
+  ; No intersections
+  (check-equal? (num-distinct-poss/delta-posss tps-no-inter) 4)
+
+  ; Cross intersections
+  (check-equal? (num-distinct-poss/delta-posss tps-inter) 6)
+
+  ; Parallel intersections
+  (check-equal? (num-distinct-poss/delta-posss tps-loop) 7)
+  (check-equal? (num-distinct-poss/delta-posss tps-loop-big) 9)
+
+  ; Parallel + cross intersections
+  (check-equal? (num-distinct-poss/delta-posss tps-paral+inter) 11))
 ;; Coord Coord TurningPoints (Reversed) -> Nat
-(define (num-distinct-poss/tp a b seen-rv-tps)
-  (for/sum ([x (in-inclusive-range (car a) (car b))]
-            [y (in-inclusive-range (cdr a) (cdr b))])
-    (if (tps-contains-coord? seen-rv-tps x y) 1 0)))
+(define (num-distinct-poss/delta-poss a b seen-rv-tps)
+  (for/sum ([(x y) (in-inclusive-pos-range a b)])
+    (if (tps-contains-coord? seen-rv-tps x y) 0 1)))
+(module+ test
+  (check-equal? (num-distinct-poss/delta-poss '(0 . 0) '(0 . 0) '((0 . 0)))
+                1)
+  (check-equal? (num-distinct-poss/delta-poss '(1 . 4) '(1 . 7) '((0 . 0)))
+                4))
 (define (tps-contains-coord? tps x y)
   (for/fold ([prev-tp (first tps)]
              [found? #f]
@@ -406,27 +378,68 @@
     #:break found?
     (values curr-tp
             (coord-range-contains-coord? prev-tp curr-tp x y))))
+(module+ test
+  (check-true (tps-contains-coord? tps-no-inter 0 2))
+  (check-false (tps-contains-coord? tps-no-inter 0 3))
+  (check-true (tps-contains-coord? tps-inter 1 1))
+  (check-false (tps-contains-coord? tps-inter 0 0)))
 (define (coord-range-contains-coord? prev-tp curr-tp x y)
   (and (or (<= (car prev-tp) x (car curr-tp))
            (>= (car prev-tp) x (car curr-tp)))
        (or (<= (cdr prev-tp) y (cdr curr-tp))
            (>= (cdr prev-tp) y (cdr curr-tp)))))
 (module+ test
-  ; No intersections
-  (check-equal? (num-distinct-poss/tps tps-no-inter) 4)
-
-  ; Cross intersections
-  (check-equal? (num-distinct-poss/tps tps-inter) 6)
-
-  ; Parallel intersections
-  (check-equal? (num-distinct-poss/tps tps-loop) 7)
-  (check-equal? (num-distinct-poss/tps tps-loop-big) 9)
-
-  ; Parallel + cross intersections
-  (check-equal? (num-distinct-poss/tps tps-paral+inter) 11))
+  (check-true (coord-range-contains-coord? '(0 . 0) '(0 . 5) 0 3))
+  (check-true (coord-range-contains-coord? '(5 . 1) '(2 . 1) 3 1))
+  (check-false (coord-range-contains-coord? '(3 . 5) '(4 . 5) 2 5))
+  (check-false (coord-range-contains-coord? '(3 . 5) '(3 . 5) 3 6)))
 
 (define (part-b)
-  (error "Not done."))
+  (define initial-m (parse))
+  (define out (num-loops initial-m))
+  (println out))
+
+;; Map -> Nat
+(define (num-loops m)
+  (match-define (gmap gdir0 gpos0 w h x->ys y->xs) m)
+  (let loop ([gdir gdir0] [gpos gpos0] [rv-tps (list gpos0)] [n-loops 0])
+    (match-define (cons next-pos edge?)
+      (get-pos-bf-obstruction gdir gpos w h x->ys y->xs))
+    (define dn-loops (num-loops/delta-poss gpos next-pos rv-tps m))
+    (define new-n-loops (+ n-loops dn-loops))
+    (define new-rv-tps (cons next-pos rv-tps))
+    (if edge?
+        new-n-loops
+        (loop (rot-dir-cw gdir) next-pos new-rv-tps new-n-loops))))
+;; Coord Coord TurningPoints Map -> Nat
+;; For each position to next position, sum number of loops that could
+;; occur for each position to the next position an obstruction is
+;; added (excluding the position the guard is already standing on).
+(define (num-loops/delta-poss a b rv-tps m0)
+  (for/sum ([(ox oy) (in-inclusive-pos-range a b)]
+            #:unless (or (equal? (cons ox oy) a)
+                         (tps-contains-coord? rv-tps ox oy)))
+    (define new-m (add-obstruction/gmap m0 (cons ox oy)))
+    (if (has-loop/gmap? new-m) 1 0)))
+;; Map DirTurningPoints -> Boolean
+;; Checks if the given map puts the guard into a loop.
+(define (has-loop/gmap? m)
+  (match-define (gmap gdir0 gpos0 w h x->ys y->xs) m)
+  (let loop ([gdir gdir0] [gpos gpos0] [rv-dtps '()])
+    (match-define (cons next-pos edge?)
+      (get-pos-bf-obstruction gdir gpos w h x->ys y->xs))
+    (cond
+      [edge? #f]
+      [(dtps-contains? (reverse rv-dtps) gdir next-pos) #t]
+      [else
+       (define new-rv-dtps (cons (cons gdir next-pos) rv-dtps))
+       (loop (rot-dir-cw gdir) next-pos new-rv-dtps)])))
+
+(module+ test
+  (check-false (has-loop/gmap? gm-no-inter))
+  (check-false (has-loop/gmap? gm-inter))
+  (check-true (has-loop/gmap? gm-loop))
+  (check-true (has-loop/gmap? gm-8)))
 
 (command-line
  #:program "1"
