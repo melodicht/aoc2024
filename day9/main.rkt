@@ -83,11 +83,11 @@
        [(free-space amt)
         (match-define (cons fid-list new-tl)
           (get-fid-from-back tl (min amt num-files-to-compress)))
-        (sequence-append (in-list fid-list)
-                         (in-compressed-fs new-tl (cast (- num-files-to-compress (length fid-list)) Natural)))]
+        (in-sequences (in-list fid-list)
+                      (in-compressed-fs new-tl (cast (- num-files-to-compress (length fid-list)) Natural)))]
        [(used-space f-id amt)
-        (sequence-append (in-repeat f-id amt)
-                         (in-compressed-fs tl (cast (- num-files-to-compress amt) Natural)))])]))
+        (in-sequences (in-repeat f-id amt)
+                      (in-compressed-fs tl (cast (- num-files-to-compress amt) Natural)))])]))
 
 (module+ test
   (: check-icf (-> String Natural [Listof Natural] Any))
